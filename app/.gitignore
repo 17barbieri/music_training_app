@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# IDEs
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated audio
+*.wav
+*.mp3
+*.flac
