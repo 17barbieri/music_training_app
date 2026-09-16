@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -10,6 +11,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QStackedLayout,
+    QHBoxLayout,
 )
 
 from app.audio.sine_player import SineWavePlayer
@@ -37,12 +40,33 @@ class MainWindow(QMainWindow):
 
         # Temporary selection state for two-stage interval answers
         self._selected_nature: str | None = None
+        self._selected_colour: str | None = None
+
+        # Button references for visual feedback and checked state
+        self._nature_buttons: dict[str, QPushButton] = {}
+        self._colour_buttons: dict[str, QPushButton] = {}
 
         self.total_questions = 0
         self.correct_answers = 0
 
         self.setWindowTitle("Harmony Trainer")
-        self.resize(1000, 700)
+        # Determine a compact default window size based on available screen
+        try:
+            screen = QGuiApplication.primaryScreen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                # Pick a size that fits comfortably on most displays
+                w = min(760, avail.width() - 80)
+                h = min(460, avail.height() - 120)
+            x = avail.x() + (avail.width() - w) // 2
+            # move window a bit further down so the top banner is fully visible
+            y = avail.y() + 30
+            # Set geometry (position + size) atomically so layout/minimums
+            # don't cause an unexpected resize later.
+            self.setGeometry(x, y, w, h)
+        except Exception:
+            # Fall back to a conservative size if positioning fails
+            self.resize(760, 460)
 
         self._build_ui()
 
@@ -51,191 +75,105 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         """Construct the application interface."""
-
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        main_layout = QVBoxLayout(
-            central_widget
-        )
+        # Stacked layout: selection page (0) and exercise page (1)
+        self.stacked_layout = QStackedLayout(central_widget)
 
-        main_layout.setContentsMargins(
-            32,
-            28,
-            32,
-            28,
-        )
-
-        main_layout.setSpacing(20)
-
-        # ---------------------------------------------------------
-        # Header
-        # ---------------------------------------------------------
+        # ---------- Selection page ----------
+        selection_page = QWidget()
+        selection_layout = QVBoxLayout(selection_page)
+        # increase top margin so title/banner is fully visible
+        selection_layout.setContentsMargins(32, 48, 32, 28)
+        selection_layout.setSpacing(12)
 
         title = QLabel("Harmony Trainer")
-
         title.setObjectName("title")
 
-        subtitle = QLabel(
-            "Train your ear to recognize intervals, "
-            "chords and harmonic progressions."
-        )
-
+        subtitle = QLabel("Train your ear to recognize intervals, chords and harmonic progressions.")
         subtitle.setObjectName("subtitle")
 
-        main_layout.addWidget(title)
-        main_layout.addWidget(subtitle)
+        selection_layout.addWidget(title)
+        selection_layout.addWidget(subtitle)
 
-        # ---------------------------------------------------------
-        # Exercise selection
-        # ---------------------------------------------------------
-
+        # Exercise selection group (on selection page)
         exercise_group = QGroupBox("Exercise")
+        exercise_layout = QGridLayout(exercise_group)
 
-        exercise_layout = QGridLayout(
-            exercise_group
-        )
-
-        exercise_layout.addWidget(
-            QLabel("Exercise type:"),
-            0,
-            0,
-        )
+        exercise_layout.addWidget(QLabel("Exercise type:"), 0, 0)
 
         self.exercise_combo = QComboBox()
+        self.exercise_combo.addItems([
+            "Interval recognition",
+            "Chord recognition",
+            "Harmonic progression recognition",
+        ])
+        self.exercise_combo.currentIndexChanged.connect(self._exercise_type_changed)
+        exercise_layout.addWidget(self.exercise_combo, 0, 1, 1, 2)
 
-        self.exercise_combo.addItems(
-            [
-                "Interval recognition",
-                "Chord recognition",
-                "Harmonic progression recognition",
-            ]
-        )
-
-        self.exercise_combo.currentIndexChanged.connect(
-            self._exercise_type_changed
-        )
-
-        exercise_layout.addWidget(
-            self.exercise_combo,
-            0,
-            1,
-            1,
-            2,
-        )
-
-        exercise_layout.addWidget(
-            QLabel("Difficulty:"),
-            1,
-            0,
-        )
+        exercise_layout.addWidget(QLabel("Difficulty:"), 1, 0)
 
         self.difficulty_combo = QComboBox()
+        self.difficulty_combo.addItems(["Beginner", "Intermediate", "Advanced"])
+        self.difficulty_combo.currentIndexChanged.connect(self._difficulty_changed)
+        exercise_layout.addWidget(self.difficulty_combo, 1, 1, 1, 2)
 
-        self.difficulty_combo.addItems(
-            [
-                "Beginner",
-                "Intermediate",
-                "Advanced",
-            ]
-        )
+        selection_layout.addWidget(exercise_group)
 
-        self.difficulty_combo.currentIndexChanged.connect(
-            self._difficulty_changed
-        )
+        self.confirm_button = QPushButton("Start exercise")
+        self.confirm_button.setMinimumHeight(40)
+        self.confirm_button.clicked.connect(self._confirm_selection)
+        selection_layout.addWidget(self.confirm_button)
 
-        exercise_layout.addWidget(
-            self.difficulty_combo,
-            1,
-            1,
-            1,
-            2,
-        )
+        self.stacked_layout.addWidget(selection_page)
 
-        main_layout.addWidget(
-            exercise_group
-        )
+        # ---------- Exercise page ----------
+        exercise_page = QWidget()
+        exercise_page_layout = QVBoxLayout(exercise_page)
+        # increase top margin so title/banner is fully visible
+        exercise_page_layout.setContentsMargins(32, 48, 32, 28)
+        exercise_page_layout.setSpacing(12)
 
-        # ---------------------------------------------------------
-        # Current exercise
-        # ---------------------------------------------------------
+        top_bar = QHBoxLayout()
+        self.back_button = QPushButton("← Back")
+        self.back_button.setMinimumHeight(34)
+        self.back_button.clicked.connect(self._go_back)
+        top_bar.addWidget(self.back_button)
 
-        current_group = QGroupBox(
-            "Current exercise"
-        )
+        self.exercise_title_label = QLabel("")
+        self.exercise_title_label.setObjectName("subtitle")
+        top_bar.addWidget(self.exercise_title_label)
+        top_bar.addStretch()
 
-        current_layout = QVBoxLayout(
-            current_group
-        )
+        exercise_page_layout.addLayout(top_bar)
 
-        self.status_label = QLabel(
-            "Press Play to hear the exercise."
-        )
+        current_group = QGroupBox("Current exercise")
+        current_layout = QVBoxLayout(current_group)
 
-        self.status_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self.status_label = QLabel("Press Play to hear the exercise.")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setMinimumHeight(80)
+        current_layout.addWidget(self.status_label)
 
-        self.status_label.setMinimumHeight(
-            100
-        )
+        self.play_button = QPushButton("▶  Play")
+        self.play_button.setMinimumHeight(44)
+        self.play_button.clicked.connect(self._play_current_exercise)
+        current_layout.addWidget(self.play_button)
 
-        current_layout.addWidget(
-            self.status_label
-        )
+        answers_group = QGroupBox("Your answer")
+        self.answers_layout = QGridLayout(answers_group)
+        current_layout.addWidget(answers_group)
 
-        self.play_button = QPushButton(
-            "▶  Play"
-        )
+        exercise_page_layout.addWidget(current_group)
 
-        self.play_button.setMinimumHeight(
-            55
-        )
+        self.score_label = QLabel("Score: 0 / 0")
+        self.score_label.setObjectName("score")
+        exercise_page_layout.addWidget(self.score_label)
 
-        self.play_button.clicked.connect(
-            self._play_current_exercise
-        )
+        self.stacked_layout.addWidget(exercise_page)
 
-        current_layout.addWidget(
-            self.play_button
-        )
-
-        # ---------------------------------------------------------
-        # Answers
-        # ---------------------------------------------------------
-
-        answers_group = QGroupBox(
-            "Your answer"
-        )
-
-        self.answers_layout = QGridLayout(
-            answers_group
-        )
-
-        current_layout.addWidget(
-            answers_group
-        )
-
-        main_layout.addWidget(
-            current_group
-        )
-
-        # ---------------------------------------------------------
-        # Score
-        # ---------------------------------------------------------
-
-        self.score_label = QLabel(
-            "Score: 0 / 0"
-        )
-
-        self.score_label.setObjectName(
-            "score"
-        )
-
-        main_layout.addWidget(
-            self.score_label
-        )
-
+        # Initialize answers for current selection
         self._refresh_answers()
 
         # ---------------------------------------------------------
@@ -276,8 +214,8 @@ class MainWindow(QMainWindow):
                 background: white;
             }
 
-            QPushButton {
-                min-height: 44px;
+            "QPushButton {
+                min-height: 36px;
                 padding: 6px 14px;
 
                 font-size: 14px;
@@ -337,6 +275,33 @@ class MainWindow(QMainWindow):
         if self.exercise_combo.currentIndex() == 0:
             self._generate_next_exercise()
 
+    def _confirm_selection(self) -> None:
+        """Start the exercise page with the selected options."""
+
+        exercise_type = self.exercise_combo.currentText()
+        difficulty = self.difficulty_combo.currentText()
+
+        self.exercise_title_label.setText(f"{exercise_type} — {difficulty}")
+
+        # Ensure answers are updated for the selected exercise
+        self._refresh_answers()
+
+        # Generate the first exercise for the session
+        if self.exercise_combo.currentIndex() == 0:
+            # reset scores for new session
+            self.total_questions = 0
+            self.correct_answers = 0
+            self._update_score()
+            self._generate_next_exercise()
+
+        # Switch to exercise page
+        self.stacked_layout.setCurrentIndex(1)
+
+    def _go_back(self) -> None:
+        """Return to the selection page."""
+
+        self.stacked_layout.setCurrentIndex(0)
+
     def _refresh_answers(self) -> None:
         """Update answer buttons according to exercise type."""
 
@@ -387,14 +352,16 @@ class MainWindow(QMainWindow):
 
             for i, name in enumerate(natures):
                 btn = QPushButton(name)
-                btn.setMinimumHeight(34)
-                btn.setMaximumWidth(120)
+                btn.setCheckable(True)
+                btn.setMinimumHeight(30)
+                btn.setMaximumWidth(110)
                 btn.clicked.connect(
                     lambda checked=False, value=name: self._nature_selected(value)
                 )
                 r = i // 2
                 c = i % 2
                 nature_layout.addWidget(btn, r, c)
+                self._nature_buttons[name] = btn
 
             # Colour/quality buttons
             colour_group = QGroupBox("Quality")
@@ -404,14 +371,16 @@ class MainWindow(QMainWindow):
 
             for i, name in enumerate(colours):
                 btn = QPushButton(name)
-                btn.setMinimumHeight(34)
-                btn.setMaximumWidth(120)
+                btn.setCheckable(True)
+                btn.setMinimumHeight(30)
+                btn.setMaximumWidth(110)
                 btn.clicked.connect(
                     lambda checked=False, value=name: self._colour_selected(value)
                 )
                 r = i // 2
                 c = i % 2
                 colour_layout.addWidget(btn, r, c)
+                self._colour_buttons[name] = btn
 
             # Place the two groups side-by-side
             self.answers_layout.addWidget(nature_group, 0, 0)
@@ -432,6 +401,13 @@ class MainWindow(QMainWindow):
 
         # Ensure layout updates
         self.answers_layout.update()
+
+        # Styling for checked buttons and temporary feedback
+        self.setStyleSheet(self.styleSheet() + "\n\n" +
+            "QPushButton:checked { background: #d9d9d9; }\n" +
+            "QPushButton.correct { background: #d4ffd4; }\n" +
+            "QPushButton.incorrect { background: #ffd6d6; }\n"
+        )
 
     def _nature_selected(self, nature: str) -> None:
         """Handle selection of interval nature (e.g. 2nd, 3rd).
@@ -460,14 +436,38 @@ class MainWindow(QMainWindow):
                 key = perfect_map.get(nature, nature)
 
             # Immediately evaluate as the user has given a perfect interval
+            # Provide a checked/visual cue briefly
+            btn = self._nature_buttons.get(nature)
+            if btn:
+                btn.setChecked(True)
+
             self._answer_selected(key)
             # clear any staged selection
             self._selected_nature = None
+            self._selected_colour = None
+            QTimer.singleShot(600, self._clear_staged_selection)
             return
 
         # For non-perfect intervals store selection and wait for quality
         # e.g. "2nd" + "Minor" -> "Minor 2nd"
+        # Toggle selection state on the pressed button
+        # Uncheck previous if any
+        if self._selected_nature and self._selected_nature in self._nature_buttons:
+            self._nature_buttons[self._selected_nature].setChecked(False)
+
         self._selected_nature = nature
+        if nature in self._nature_buttons:
+            self._nature_buttons[nature].setChecked(True)
+
+        # If a colour was already selected, combine immediately
+        if self._selected_colour:
+            answer = f"{self._selected_colour} {nature}"
+            # Clear staged selection after evaluating
+            self._answer_selected(answer)
+            self._selected_nature = None
+            self._selected_colour = None
+            QTimer.singleShot(600, self._clear_staged_selection)
+            return
 
         # Provide a small status cue
         self.status_label.setText(f"Selected: {nature}. Now choose Major/Minor.")
@@ -475,34 +475,35 @@ class MainWindow(QMainWindow):
     def _colour_selected(self, colour: str) -> None:
         """Handle quality selection (Major/Minor) and combine with nature."""
 
-        if self._selected_nature is None:
-            # Nothing chosen yet — prompt the user to pick the nature first
-            self.status_label.setText("Select the interval number first (e.g. 2nd, 3rd).")
-            return
+        # If a nature was already selected, combine immediately
+        if self._selected_nature:
+            # The nature is something like '2nd' or '3rd'
+            answer = f"{colour} {self._selected_nature}"
+            # Provide checked cue for colour button
+            if self._selected_colour and self._selected_colour in self._colour_buttons:
+                self._colour_buttons[self._selected_colour].setChecked(False)
 
-        # Map displayed nature to ordinal used in the INTERVALS keys
-        ord_map = {
-            "2nd": "2nd",
-            "3rd": "3rd",
-            "6th": "6th",
-            "7th": "7th",
-        }
+            self._selected_colour = colour
+            if colour in self._colour_buttons:
+                self._colour_buttons[colour].setChecked(True)
 
-        nature = self._selected_nature
-
-        if nature not in ord_map:
-            # Safety fallback
-            self.status_label.setText("Invalid interval selection.")
+            self._answer_selected(answer)
             self._selected_nature = None
+            self._selected_colour = None
+            QTimer.singleShot(600, self._clear_staged_selection)
             return
 
-        answer = f"{colour} {ord_map[nature]}"
+        # Otherwise store selected colour and wait for nature
+        if self._selected_colour and self._selected_colour in self._colour_buttons:
+            self._colour_buttons[self._selected_colour].setChecked(False)
 
-        # Clear staged selection
-        self._selected_nature = None
+        self._selected_colour = colour
+        if colour in self._colour_buttons:
+            self._colour_buttons[colour].setChecked(True)
 
-        # Evaluate
-        self._answer_selected(answer)
+        self.status_label.setText(f"Selected: {colour}. Now choose the interval number.")
+        return
+        
 
     def _generate_next_exercise(self) -> None:
         """Generate and store the next interval exercise."""
@@ -565,26 +566,105 @@ class MainWindow(QMainWindow):
 
         exercise = self.current_exercise
 
+        # Evaluate
+        correct = exercise.is_correct(answer)
+
         self.total_questions += 1
 
-        if exercise.is_correct(answer):
+        if correct:
             self.correct_answers += 1
-
-            self.status_label.setText(
-                f"✓ Correct! It was a {exercise.answer}."
-            )
-
+            self.status_label.setText(f"✓ Correct! It was a {exercise.answer}.")
         else:
             self.status_label.setText(
-                f"✗ Incorrect. The answer was "
-                f"{exercise.answer}."
+                f"✗ Incorrect. The answer was {exercise.answer}."
             )
 
-        self._update_score()
+        # Show visual feedback on the selected and correct buttons,
+        # then update score and generate the next exercise after a short delay.
+        self._show_feedback(answer, correct, exercise.answer)
 
-        # The current question has now been answered.
-        # Generate a new one for the next round.
+        QTimer.singleShot(700, self._after_feedback)
+
+    def _after_feedback(self) -> None:
+        """Actions to perform after feedback display: update score and next exercise."""
+
+        self._update_score()
         self._generate_next_exercise()
+        self._clear_staged_selection()
+
+    def _clear_staged_selection(self) -> None:
+        """Clear any staged selections and reset button states/styles."""
+
+        for btn in self._nature_buttons.values():
+            try:
+                btn.setChecked(False)
+                btn.setStyleSheet("")
+            except Exception:
+                pass
+
+        for btn in self._colour_buttons.values():
+            try:
+                btn.setChecked(False)
+                btn.setStyleSheet("")
+            except Exception:
+                pass
+
+        self._selected_nature = None
+        self._selected_colour = None
+
+    def _show_feedback(self, given: str, correct: bool, correct_answer: str) -> None:
+        """Visually mark selected and correct buttons.
+
+        - Selected buttons are marked green if correct, red if incorrect.
+        - The canonical correct buttons are also marked green.
+        The markings clear after a short timeout.
+        """
+
+        # Helper to parse an answer into (colour, nature) or perfect nature
+        def parse(ans: str):
+            if ans in ("Unison", "Octave") or ans.startswith("Perfect "):
+                # Perfect intervals
+                if ans == "Unison":
+                    return (None, "Unison")
+                if ans == "Octave":
+                    return (None, "Octave")
+                # e.g. 'Perfect 4th' -> ('Perfect', '4th') but nature button is '4th'
+                parts = ans.split()
+                return (None, parts[-1])
+            parts = ans.split(" ", 1)
+            if len(parts) == 2:
+                colour, nature = parts
+                return (colour, nature)
+            return (None, ans)
+
+        given_colour, given_nature = parse(given)
+        corr_colour, corr_nature = parse(correct_answer)
+
+        selected_btns = []
+        correct_btns = []
+
+        if given_nature and given_nature in self._nature_buttons:
+            selected_btns.append(self._nature_buttons[given_nature])
+        if given_colour and given_colour in self._colour_buttons:
+            selected_btns.append(self._colour_buttons[given_colour])
+
+        if corr_nature and corr_nature in self._nature_buttons:
+            correct_btns.append(self._nature_buttons[corr_nature])
+        if corr_colour and corr_colour in self._colour_buttons:
+            correct_btns.append(self._colour_buttons[corr_colour])
+
+        # Apply styles
+        for btn in selected_btns:
+            if correct:
+                btn.setStyleSheet("background: #d4ffd4")
+            else:
+                btn.setStyleSheet("background: #ffd6d6")
+
+        for btn in correct_btns:
+            btn.setStyleSheet("background: #d4ffd4")
+
+        # Clear styles shortly after
+        QTimer.singleShot(700, self._clear_staged_selection)
 
     def _update_score(self) -> None:
         """Update the score display."""
