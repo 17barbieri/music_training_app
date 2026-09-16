@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
+    QDialog,
     QGridLayout,
+    QHeaderView,
     QGroupBox,
     QLabel,
     QMainWindow,
@@ -13,13 +16,22 @@ from PySide6.QtWidgets import (
     QWidget,
     QStackedLayout,
     QHBoxLayout,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QSizePolicy,
+    QScrollArea,
 )
 
 from app.audio.sine_player import SineWavePlayer
 from app.exercises.generator import IntervalGenerator
 from app.exercises.interval import IntervalExercise
+from app.exercises.confusion_matrix import ConfusionMatrix
+from app.exercises.chord import ChordExercise
+from app.exercises.chord_generator import ChordGenerator
 from app.exercises.theory import (
     CHORDS,
+    CHORD_PROFILES,
     INTERVAL_DIFFICULTIES,
     INTERVALS,
     PROGRESSIONS,
@@ -35,8 +47,12 @@ class MainWindow(QMainWindow):
         self.audio = SineWavePlayer()
 
         self.interval_generator = IntervalGenerator()
+        self.chord_generator = ChordGenerator()
+        self.confusion_matrix = ConfusionMatrix()
 
-        self.current_exercise: IntervalExercise | None = None
+        self.current_exercise: IntervalExercise | ChordExercise | None = None
+        self.chord_checkboxes: dict[str, QCheckBox] = {}
+        self.selected_chords = list(CHORD_PROFILES["All triads"])
 
         # Temporary selection state for two-stage interval answers
         self._selected_nature: str | None = None
@@ -45,6 +61,10 @@ class MainWindow(QMainWindow):
         # Button references for visual feedback and checked state
         self._nature_buttons: dict[str, QPushButton] = {}
         self._colour_buttons: dict[str, QPushButton] = {}
+        self._chord_type_buttons: dict[str, QPushButton] = {}
+        self._chord_inversion_buttons: dict[int, QPushButton] = {}
+        self._selected_chord_type: str | None = None
+        self._selected_chord_inversion: int | None = None
 
         self.total_questions = 0
         self.correct_answers = 0
@@ -85,14 +105,15 @@ class MainWindow(QMainWindow):
         selection_page = QWidget()
         selection_layout = QVBoxLayout(selection_page)
         # increase top margin so title/banner is fully visible
-        selection_layout.setContentsMargins(32, 48, 32, 28)
-        selection_layout.setSpacing(12)
+        selection_layout.setContentsMargins(24, 24, 24, 20)
+        selection_layout.setSpacing(8)
 
         title = QLabel("Harmony Trainer")
         title.setObjectName("title")
 
         subtitle = QLabel("Train your ear to recognize intervals, chords and harmonic progressions.")
         subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
 
         selection_layout.addWidget(title)
         selection_layout.addWidget(subtitle)
@@ -109,17 +130,36 @@ class MainWindow(QMainWindow):
             "Chord recognition",
             "Harmonic progression recognition",
         ])
+        self.exercise_combo.setFixedWidth(360)
         self.exercise_combo.currentIndexChanged.connect(self._exercise_type_changed)
         exercise_layout.addWidget(self.exercise_combo, 0, 1, 1, 2)
 
-        exercise_layout.addWidget(QLabel("Difficulty:"), 1, 0)
+        selection_layout.addWidget(exercise_group)
 
+        self.options_group = QGroupBox("Exercise options")
+        self.options_layout = QGridLayout(self.options_group)
+
+        self.difficulty_label = QLabel("Difficulty:")
         self.difficulty_combo = QComboBox()
         self.difficulty_combo.addItems(["Beginner", "Intermediate", "Advanced"])
+        self.difficulty_combo.setFixedWidth(360)
         self.difficulty_combo.currentIndexChanged.connect(self._difficulty_changed)
-        exercise_layout.addWidget(self.difficulty_combo, 1, 1, 1, 2)
+        self.options_layout.addWidget(self.difficulty_label, 0, 0)
+        self.options_layout.addWidget(self.difficulty_combo, 0, 1)
 
-        selection_layout.addWidget(exercise_group)
+        self.chord_profile_label = QLabel("Chord profile:")
+        self.chord_profile_combo = QComboBox()
+        self.chord_profile_combo.addItems(CHORD_PROFILES)
+        self.chord_profile_combo.currentTextChanged.connect(
+            self._chord_profile_changed
+        )
+        self.options_layout.addWidget(self.chord_profile_label, 1, 0)
+        self.options_layout.addWidget(self.chord_profile_combo, 1, 1)
+
+        self.options_message = QLabel()
+        self.options_layout.addWidget(self.options_message, 2, 0, 1, 2)
+
+        selection_layout.addWidget(self.options_group)
 
         self.confirm_button = QPushButton("Start exercise")
         self.confirm_button.setMinimumHeight(40)
@@ -132,8 +172,8 @@ class MainWindow(QMainWindow):
         exercise_page = QWidget()
         exercise_page_layout = QVBoxLayout(exercise_page)
         # increase top margin so title/banner is fully visible
-        exercise_page_layout.setContentsMargins(32, 48, 32, 28)
-        exercise_page_layout.setSpacing(12)
+        exercise_page_layout.setContentsMargins(20, 14, 20, 12)
+        exercise_page_layout.setSpacing(6)
 
         top_bar = QHBoxLayout()
         self.back_button = QPushButton("← Back")
@@ -153,17 +193,27 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("Press Play to hear the exercise.")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setMinimumHeight(80)
+        self.status_label.setMinimumHeight(30)
         current_layout.addWidget(self.status_label)
 
         self.play_button = QPushButton("▶  Play")
-        self.play_button.setMinimumHeight(44)
+        self.play_button.setMinimumHeight(32)
         self.play_button.clicked.connect(self._play_current_exercise)
         current_layout.addWidget(self.play_button)
 
         answers_group = QGroupBox("Your answer")
         self.answers_layout = QGridLayout(answers_group)
-        current_layout.addWidget(answers_group)
+        self.answers_scroll = QScrollArea()
+        self.answers_scroll.setWidgetResizable(True)
+        self.answers_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.answers_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.answers_scroll.setFixedHeight(140)
+        self.answers_scroll.setWidget(answers_group)
+        current_layout.addWidget(self.answers_scroll)
 
         exercise_page_layout.addWidget(current_group)
 
@@ -171,10 +221,30 @@ class MainWindow(QMainWindow):
         self.score_label.setObjectName("score")
         exercise_page_layout.addWidget(self.score_label)
 
+        matrix_controls = QWidget()
+        matrix_layout = QGridLayout(matrix_controls)
+        matrix_layout.setContentsMargins(0, 0, 0, 0)
+        matrix_layout.addWidget(QLabel("Confusion matrix:"), 0, 0)
+        self.view_matrix_button = QPushButton("View matrix")
+        self.view_matrix_button.clicked.connect(self._show_matrix)
+        matrix_layout.addWidget(self.view_matrix_button, 0, 1)
+
+        self.reset_matrix_button = QPushButton("Reset matrix")
+        self.reset_matrix_button.setMinimumHeight(26)
+        self.reset_matrix_button.clicked.connect(self._reset_current_matrix)
+        matrix_layout.addWidget(self.reset_matrix_button, 0, 2)
+        self.choose_chords_button = QPushButton("Choose chord types")
+        self.choose_chords_button.clicked.connect(self._choose_chords)
+        matrix_layout.addWidget(self.choose_chords_button, 1, 0, 1, 2)
+        exercise_page_layout.addWidget(matrix_controls)
+
         self.stacked_layout.addWidget(exercise_page)
 
         # Initialize answers for current selection
         self._refresh_answers()
+        self._refresh_matrix()
+        self._refresh_exercise_options()
+        self._update_chord_selection_visibility()
 
         # ---------------------------------------------------------
         # Styling
@@ -209,14 +279,14 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
 
                 margin-top: 10px;
-                padding: 14px;
+                padding: 8px;
 
                 background: white;
             }
 
-            "QPushButton {
-                min-height: 36px;
-                padding: 6px 14px;
+            QPushButton {
+                min-height: 30px;
+                padding: 4px 8px;
 
                 font-size: 14px;
 
@@ -249,6 +319,10 @@ class MainWindow(QMainWindow):
         self._update_score()
 
         self._refresh_answers()
+        self._update_chord_selection_visibility()
+        self._refresh_exercise_options()
+        if index == 1:
+            self._chord_profile_changed(self.chord_profile_combo.currentText())
 
         if index == 0:
             self._generate_next_exercise()
@@ -275,6 +349,90 @@ class MainWindow(QMainWindow):
         if self.exercise_combo.currentIndex() == 0:
             self._generate_next_exercise()
 
+    def _chord_profile_changed(self, profile: str) -> None:
+        """Apply a standard chord profile from the selection page."""
+
+        self.selected_chords = list(CHORD_PROFILES[profile])
+        if self.exercise_combo.currentIndex() == 1:
+            self._refresh_answers()
+
+    def _choose_chords(self) -> None:
+        """Open the custom chord selection dialog."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Choose chord types")
+        layout = QVBoxLayout(dialog)
+        checkboxes: dict[str, QCheckBox] = {}
+        chord_layout = QGridLayout()
+
+        for index, chord_name in enumerate(CHORDS):
+            checkbox = QCheckBox(chord_name)
+            checkbox.setChecked(chord_name in self.selected_chords)
+            checkboxes[chord_name] = checkbox
+            chord_layout.addWidget(checkbox, index // 3, index % 3)
+
+        layout.addLayout(chord_layout)
+        buttons = QHBoxLayout()
+        apply_button = QPushButton("Apply")
+        cancel_button = QPushButton("Cancel")
+        buttons.addWidget(apply_button)
+        buttons.addWidget(cancel_button)
+        layout.addLayout(buttons)
+        apply_button.clicked.connect(dialog.accept)
+        cancel_button.clicked.connect(dialog.reject)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_chords = [
+            chord_name
+            for chord_name, checkbox in checkboxes.items()
+            if checkbox.isChecked()
+        ]
+        if not selected_chords:
+            self.status_label.setText("Select at least one chord type.")
+            return
+
+        self.selected_chords = selected_chords
+        self._refresh_answers()
+        self._generate_next_exercise()
+
+    def _update_chord_selection_visibility(self) -> None:
+        self.choose_chords_button.setVisible(self.exercise_combo.currentIndex() == 1)
+
+    def _refresh_exercise_options(self) -> None:
+        """Show only the options belonging to the selected exercise type."""
+
+        exercise_index = self.exercise_combo.currentIndex()
+        is_interval = exercise_index == 0
+        is_chord = exercise_index == 1
+        self.difficulty_label.setVisible(is_interval)
+        self.difficulty_combo.setVisible(is_interval)
+        self.chord_profile_label.setVisible(is_chord)
+        self.chord_profile_combo.setVisible(is_chord)
+        self.options_message.setVisible(exercise_index > 1)
+        if exercise_index > 1:
+            self.options_message.setText("No options are available yet.")
+
+    def _selected_chords(self) -> list[str]:
+        return list(self.selected_chords)
+
+    @staticmethod
+    def _chord_answers(chord_names: list[str]) -> list[str]:
+        positions = [
+            "Root position",
+            "1st inversion",
+            "2nd inversion",
+            "3rd inversion",
+        ]
+        return [
+            f"{chord_name} - {positions[inversion]}"
+            for chord_name in chord_names
+            for inversion in range(
+                1 if chord_name == "Augmented" else len(CHORDS[chord_name])
+            )
+        ]
+
     def _confirm_selection(self) -> None:
         """Start the exercise page with the selected options."""
 
@@ -287,7 +445,7 @@ class MainWindow(QMainWindow):
         self._refresh_answers()
 
         # Generate the first exercise for the session
-        if self.exercise_combo.currentIndex() == 0:
+        if self.exercise_combo.currentIndex() in (0, 1):
             # reset scores for new session
             self.total_questions = 0
             self.correct_answers = 0
@@ -304,6 +462,13 @@ class MainWindow(QMainWindow):
 
     def _refresh_answers(self) -> None:
         """Update answer buttons according to exercise type."""
+
+        self._nature_buttons.clear()
+        self._colour_buttons.clear()
+        self._chord_type_buttons.clear()
+        self._chord_inversion_buttons.clear()
+        self._selected_chord_type = None
+        self._selected_chord_inversion = None
 
         while self.answers_layout.count():
             item = self.answers_layout.takeAt(0)
@@ -323,15 +488,13 @@ class MainWindow(QMainWindow):
             )
 
         elif exercise_index == 1:
-            options = list(
-                CHORDS.keys()
-            )
+            options = self._chord_answers(self._selected_chords())
 
         else:
             options = PROGRESSIONS
 
         # If this is the interval exercise, present answers in two
-        # compact groups: nature (2nd, 3rd, etc.) and colour
+        # compact groups: nature (2nd, 3rd, etc.) and quality
         # (Major/Minor). Perfect intervals are validated immediately
         # when their nature is clicked.
         if exercise_index == 0:
@@ -340,11 +503,11 @@ class MainWindow(QMainWindow):
             nature_layout = QGridLayout(nature_group)
 
             natures = [
-                "Unison",
                 "2nd",
                 "3rd",
                 "4th",
                 "5th",
+                "Tritone",
                 "6th",
                 "7th",
                 "Octave",
@@ -358,16 +521,16 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(
                     lambda checked=False, value=name: self._nature_selected(value)
                 )
-                r = i // 2
-                c = i % 2
+                r = i // 4
+                c = i % 4
                 nature_layout.addWidget(btn, r, c)
                 self._nature_buttons[name] = btn
 
-            # Colour/quality buttons
+            # Quality buttons
             colour_group = QGroupBox("Quality")
             colour_layout = QGridLayout(colour_group)
 
-            colours = ["Major", "Minor", "Diminished", "Tritone"]
+            colours = ["Minor", "Major"]
 
             for i, name in enumerate(colours):
                 btn = QPushButton(name)
@@ -377,8 +540,8 @@ class MainWindow(QMainWindow):
                 btn.clicked.connect(
                     lambda checked=False, value=name: self._colour_selected(value)
                 )
-                r = i // 2
-                c = i % 2
+                r = 0
+                c = i
                 colour_layout.addWidget(btn, r, c)
                 self._colour_buttons[name] = btn
 
@@ -386,21 +549,58 @@ class MainWindow(QMainWindow):
             self.answers_layout.addWidget(nature_group, 0, 0)
             self.answers_layout.addWidget(colour_group, 0, 1)
 
+        elif exercise_index == 1:
+            type_group = QGroupBox("Chord type")
+            type_layout = QGridLayout(type_group)
+            for index, chord_name in enumerate(self._selected_chords()):
+                button = QPushButton(chord_name)
+                button.setCheckable(True)
+                button.clicked.connect(
+                    lambda checked=False, value=chord_name: self._chord_type_selected(value)
+                )
+                type_layout.addWidget(button, index // 3, index % 3)
+                self._chord_type_buttons[chord_name] = button
+
+            inversion_group = QGroupBox("Inversion")
+            inversion_layout = QGridLayout(inversion_group)
+            inversions = [
+                (0, "Root"),
+                (1, "1st"),
+                (2, "2nd"),
+                (3, "3rd"),
+            ]
+            for index, (value, label) in enumerate(inversions):
+                button = QPushButton(label)
+                button.setCheckable(True)
+                button.clicked.connect(
+                    lambda checked=False, inversion=value: self._chord_inversion_selected(inversion)
+                )
+                inversion_layout.addWidget(button, 0, index)
+                self._chord_inversion_buttons[value] = button
+
+            self.answers_layout.addWidget(type_group, 0, 0)
+            self.answers_layout.addWidget(inversion_group, 0, 1)
+            self._update_chord_inversion_buttons()
+
         else:
             for index, answer in enumerate(options):
                 button = QPushButton(answer)
                 button.setMinimumHeight(40)
+                if exercise_index == 1:
+                    button.setFixedWidth(260)
                 button.clicked.connect(
                     lambda checked=False, value=answer: self._answer_selected(value)
                 )
 
-                row = index // 3
-                column = index % 3
+                columns = 2 if exercise_index == 1 else 3
+                row = index // columns
+                column = index % columns
 
                 self.answers_layout.addWidget(button, row, column)
 
         # Ensure layout updates
         self.answers_layout.update()
+        self._refresh_matrix()
 
         # Styling for checked buttons and temporary feedback
         self.setStyleSheet(self.styleSheet() + "\n\n" +
@@ -412,28 +612,22 @@ class MainWindow(QMainWindow):
     def _nature_selected(self, nature: str) -> None:
         """Handle selection of interval nature (e.g. 2nd, 3rd).
 
-        For perfect intervals (Unison, 4th, 5th, Octave) this
+        For perfect intervals (4th, 5th, Octave) and Tritone this
         immediately validates the answer.
         """
 
         # Map short names to the exact answer strings used by INTERVALS
-        perfect_map = {
-            "Unison": "Unison",
+        immediate_answers = {
             "4th": "Perfect 4th",
             "5th": "Perfect 5th",
             "Octave": "Octave",
+            "Tritone": "Tritone",
         }
 
         # Normalize names like '2nd' -> '2nd' etc; for non-perfect we
         # wait for colour selection to disambiguate Major/Minor.
-        if nature in perfect_map or nature == "Unison":
-            # Determine proper key
-            if nature == "Unison":
-                key = "Unison"
-            elif nature == "Octave":
-                key = "Octave"
-            else:
-                key = perfect_map.get(nature, nature)
+        if nature in immediate_answers:
+            key = immediate_answers[nature]
 
             # Immediately evaluate as the user has given a perfect interval
             # Provide a checked/visual cue briefly
@@ -506,25 +700,161 @@ class MainWindow(QMainWindow):
         
 
     def _generate_next_exercise(self) -> None:
-        """Generate and store the next interval exercise."""
+        """Generate and store the next selected exercise."""
 
         difficulty = (
             self.difficulty_combo.currentText()
         )
 
-        allowed_intervals = (
-            INTERVAL_DIFFICULTIES[difficulty]
-        )
-
-        self.current_exercise = (
-            self.interval_generator.generate(
-                allowed_intervals
-            )
-        )
+        if self.exercise_combo.currentIndex() == 1:
+            selected_chords = self._selected_chords()
+            if not selected_chords:
+                self.current_exercise = None
+                self.status_label.setText("Select at least one chord type.")
+                return
+            self.current_exercise = self.chord_generator.generate(selected_chords)
+        else:
+            allowed_intervals = INTERVAL_DIFFICULTIES[difficulty]
+            self.current_exercise = self.interval_generator.generate(allowed_intervals)
 
         self.status_label.setText(
             "Press Play to hear the exercise."
         )
+
+    def _refresh_matrix(self) -> None:
+        """Display the persistent confusion matrix for the selected exercise."""
+
+        if not hasattr(self, "matrix_table") or self.matrix_table is None:
+            return
+
+        exercise_type = self.exercise_combo.currentText()
+        matrix = self.confusion_matrix.get(exercise_type)
+        answer_order = [
+            "Minor 2nd",
+            "Major 2nd",
+            "Minor 3rd",
+            "Major 3rd",
+            "Perfect 4th",
+            "Perfect 5th",
+            "Tritone",
+            "Minor 6th",
+            "Major 6th",
+            "Minor 7th",
+            "Major 7th",
+            "Octave",
+        ]
+        answers_found = {
+            answer
+            for expected_answers in matrix.values()
+            for answer in expected_answers
+        } | set(matrix)
+        if exercise_type == "Interval recognition":
+            answers_found |= set(INTERVALS)
+        answers = [
+            answer for answer in answer_order if answer in answers_found
+        ]
+        answers.extend(sorted(answers_found - set(answers)))
+
+        self.matrix_table.clear()
+        self.matrix_table.setRowCount(len(answers))
+        self.matrix_table.setColumnCount(len(answers))
+        self.matrix_table.setVerticalHeaderLabels(answers)
+        self.matrix_table.setHorizontalHeaderLabels(answers)
+
+        for row, expected in enumerate(answers):
+            total_answers = sum(matrix.get(expected, {}).values())
+            for column, given in enumerate(answers):
+                count = matrix.get(expected, {}).get(given, 0)
+                item = QTableWidgetItem(str(count))
+                if total_answers and count:
+                    intensity = min(220, 40 + int(180 * count / total_answers))
+                    if given == expected:
+                        item.setBackground(
+                            QBrush(QColor(80, 190, 105, intensity))
+                        )
+                    else:
+                        item.setBackground(
+                            QBrush(QColor(220, 85, 75, intensity))
+                        )
+                self.matrix_table.setItem(row, column, item)
+
+    def _show_matrix(self) -> None:
+        """Show the persistent confusion matrix in a separate window."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            f"{self.exercise_combo.currentText()} confusion matrix"
+        )
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            dialog.resize(
+                min(1100, available.width() - 40),
+                min(560, available.height() - 80),
+            )
+        else:
+            dialog.resize(1100, 560)
+        layout = QVBoxLayout(dialog)
+
+        self.matrix_table = QTableWidget(dialog)
+        self.matrix_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.matrix_table.setMinimumWidth(0)
+        self.matrix_table.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.matrix_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.matrix_table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.matrix_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.matrix_table.verticalHeader().setDefaultSectionSize(24)
+        self.matrix_table.setMinimumHeight(330)
+        layout.addWidget(self.matrix_table)
+
+        color_bar = QLabel()
+        color_bar.setFixedHeight(18)
+        color_bar.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #dc554b, stop:0.5 #f5f5f5, stop:1 #50be69);"
+        )
+        layout.addWidget(color_bar)
+
+        legend_layout = QHBoxLayout()
+        legend_layout.addWidget(QLabel("Needs practice"))
+        legend_layout.addStretch()
+        legend_layout.addWidget(QLabel("Strong performance"))
+        layout.addLayout(legend_layout)
+
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+
+        self._refresh_matrix()
+        dialog.exec()
+        self.matrix_table = None
+
+
+    def _reset_current_matrix(self) -> None:
+        """Reset the matrix for the selected exercise type."""
+
+        exercise_type = self.exercise_combo.currentText()
+        confirmation = QMessageBox.question(
+            self,
+            "Reset confusion matrix",
+            f"Reset the {exercise_type} confusion matrix?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+
+        self.confusion_matrix.reset(exercise_type)
+        self._refresh_matrix()
 
     def _play_current_exercise(self) -> None:
         """Play the currently generated interval."""
@@ -538,21 +868,16 @@ class MainWindow(QMainWindow):
             "Playing..."
         )
 
-        # First prototype: melodic interval.
-        #
-        # The first note is played, followed by the second note.
-        self.audio.play_note(
-            exercise.root_note,
-            duration=0.7,
-        )
-
-        self.audio.play_note(
-            exercise.second_note,
-            duration=0.7,
-        )
+        if isinstance(exercise, ChordExercise):
+            self.audio.play_chord(exercise.notes, duration=1.0)
+        else:
+            self.audio.play_note(exercise.root_note, duration=0.7)
+            self.audio.play_note(exercise.second_note, duration=0.7)
 
         self.status_label.setText(
             "What interval did you hear?"
+            if isinstance(exercise, IntervalExercise)
+            else "What chord did you hear?"
         )
 
     def _answer_selected(
@@ -568,6 +893,12 @@ class MainWindow(QMainWindow):
 
         # Evaluate
         correct = exercise.is_correct(answer)
+        self.confusion_matrix.record(
+            self.exercise_combo.currentText(),
+            exercise.answer,
+            answer,
+        )
+        self._refresh_matrix()
 
         self.total_questions += 1
 
@@ -589,8 +920,8 @@ class MainWindow(QMainWindow):
         """Actions to perform after feedback display: update score and next exercise."""
 
         self._update_score()
-        self._generate_next_exercise()
         self._clear_staged_selection()
+        self._generate_next_exercise()
 
     def _clear_staged_selection(self) -> None:
         """Clear any staged selections and reset button states/styles."""
@@ -609,8 +940,24 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        for btn in self._chord_type_buttons.values():
+            try:
+                btn.setChecked(False)
+                btn.setStyleSheet("")
+            except Exception:
+                pass
+
+        for btn in self._chord_inversion_buttons.values():
+            try:
+                btn.setChecked(False)
+                btn.setStyleSheet("")
+            except Exception:
+                pass
+
         self._selected_nature = None
         self._selected_colour = None
+        self._selected_chord_type = None
+        self._selected_chord_inversion = None
 
     def _show_feedback(self, given: str, correct: bool, correct_answer: str) -> None:
         """Visually mark selected and correct buttons.
@@ -620,12 +967,44 @@ class MainWindow(QMainWindow):
         The markings clear after a short timeout.
         """
 
+        if isinstance(self.current_exercise, ChordExercise):
+            positions = {
+                "Root position": 0,
+                "1st inversion": 1,
+                "2nd inversion": 2,
+                "3rd inversion": 3,
+            }
+
+            def parse_chord(answer: str) -> tuple[str, int]:
+                chord_type, position = answer.rsplit(" - ", 1)
+                return chord_type, positions[position]
+
+            given_type, given_inversion = parse_chord(given)
+            correct_type, correct_inversion = parse_chord(correct_answer)
+            selected_buttons = []
+            correct_buttons = []
+            if given_type in self._chord_type_buttons:
+                selected_buttons.append(self._chord_type_buttons[given_type])
+            if given_inversion in self._chord_inversion_buttons:
+                selected_buttons.append(self._chord_inversion_buttons[given_inversion])
+            if correct_type in self._chord_type_buttons:
+                correct_buttons.append(self._chord_type_buttons[correct_type])
+            if correct_inversion in self._chord_inversion_buttons:
+                correct_buttons.append(self._chord_inversion_buttons[correct_inversion])
+
+            for button in selected_buttons:
+                button.setStyleSheet(
+                    "background: #d4ffd4" if correct else "background: #ffd6d6"
+                )
+            for button in correct_buttons:
+                button.setStyleSheet("background: #d4ffd4")
+            QTimer.singleShot(700, self._clear_staged_selection)
+            return
+
         # Helper to parse an answer into (colour, nature) or perfect nature
         def parse(ans: str):
-            if ans in ("Unison", "Octave") or ans.startswith("Perfect "):
+            if ans == "Octave" or ans.startswith("Perfect "):
                 # Perfect intervals
-                if ans == "Unison":
-                    return (None, "Unison")
                 if ans == "Octave":
                     return (None, "Octave")
                 # e.g. 'Perfect 4th' -> ('Perfect', '4th') but nature button is '4th'
@@ -674,3 +1053,54 @@ class MainWindow(QMainWindow):
             f"{self.correct_answers} / "
             f"{self.total_questions}"
         )
+
+    def _chord_type_selected(self, chord_type: str) -> None:
+        """Stage a chord type and evaluate when its inversion is known."""
+
+        self._set_chord_type_checked(chord_type)
+        self._selected_chord_type = chord_type
+        self._update_chord_inversion_buttons()
+        if chord_type == "Augmented":
+            self._answer_selected("Augmented - Root position")
+            return
+
+        if self._selected_chord_inversion is not None and self._selected_chord_inversion >= len(CHORDS[chord_type]):
+            self._chord_inversion_buttons[self._selected_chord_inversion].setChecked(False)
+            self._selected_chord_inversion = None
+        if self._selected_chord_inversion is not None:
+            self._submit_chord_selection()
+
+    def _chord_inversion_selected(self, inversion: int) -> None:
+        """Stage an inversion and evaluate when its chord type is known."""
+
+        if self._selected_chord_type == "Augmented":
+            self._selected_chord_inversion = None
+            self._update_chord_inversion_buttons()
+            return
+
+        if inversion not in self._chord_inversion_buttons:
+            return
+
+        self._selected_chord_inversion = inversion
+        for value, button in self._chord_inversion_buttons.items():
+            button.setChecked(value == inversion)
+        if self._selected_chord_type is not None:
+            self._submit_chord_selection()
+
+    def _submit_chord_selection(self) -> None:
+        if self._selected_chord_type is None or self._selected_chord_inversion is None:
+            return
+        self._answer_selected(
+            f"{self._selected_chord_type} - "
+            f"{['Root position', '1st inversion', '2nd inversion', '3rd inversion'][self._selected_chord_inversion]}"
+        )
+
+    def _set_chord_type_checked(self, chord_type: str) -> None:
+        for name, button in self._chord_type_buttons.items():
+            button.setChecked(name == chord_type)
+
+    def _update_chord_inversion_buttons(self) -> None:
+        chord_type = self._selected_chord_type
+        inversion_count = len(CHORDS.get(chord_type, [0, 1, 2]))
+        for inversion, button in self._chord_inversion_buttons.items():
+            button.setVisible(inversion < inversion_count and chord_type != "Augmented")

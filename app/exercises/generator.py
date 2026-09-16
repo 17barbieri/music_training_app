@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 
+from app.config import HIGHEST_PLAYABLE_NOTE, LOWEST_PLAYABLE_NOTE
 from app.exercises.interval import IntervalExercise
 
 
@@ -10,8 +11,8 @@ class IntervalGenerator:
 
     def __init__(
         self,
-        min_note: int = 48,
-        max_note: int = 72,
+        min_note: int = LOWEST_PLAYABLE_NOTE,
+        max_note: int = HIGHEST_PLAYABLE_NOTE,
     ) -> None:
         """Initialize the generator.
 
@@ -27,6 +28,16 @@ class IntervalGenerator:
         if min_note > max_note:
             raise ValueError(
                 "min_note must be less than or equal to max_note."
+            )
+
+        if min_note < LOWEST_PLAYABLE_NOTE:
+            raise ValueError(
+                "min_note is below the lowest playable note."
+            )
+
+        if max_note > HIGHEST_PLAYABLE_NOTE:
+            raise ValueError(
+                "max_note is above the highest playable note."
             )
 
         self.min_note = min_note

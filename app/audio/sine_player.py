@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.config import HIGHEST_PLAYABLE_NOTE, LOWEST_PLAYABLE_NOTE
+
 
 class SineWavePlayer:
     """Generate and play simple sine-wave tones.
@@ -28,8 +30,29 @@ class SineWavePlayer:
 
     SAMPLE_RATE = 44_100
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        lowest_note: int = LOWEST_PLAYABLE_NOTE,
+        highest_note: int = HIGHEST_PLAYABLE_NOTE,
+    ) -> None:
+        if lowest_note > highest_note:
+            raise ValueError(
+                "lowest_note must be less than or equal to highest_note."
+            )
+
+        if lowest_note < 0 or highest_note > 127:
+            raise ValueError("MIDI notes must be between 0 and 127.")
+
+        self.lowest_note = lowest_note
+        self.highest_note = highest_note
         self._stop_event = threading.Event()
+
+    def _validate_note(self, midi_note: int) -> None:
+        if not self.lowest_note <= midi_note <= self.highest_note:
+            raise ValueError(
+                f"MIDI note {midi_note} is outside the playable range "
+                f"({self.lowest_note}-{self.highest_note})."
+            )
 
     @staticmethod
     def midi_to_frequency(midi_note: int) -> float:
@@ -44,6 +67,7 @@ class SineWavePlayer:
     ) -> np.ndarray:
         """Generate a sine wave for a MIDI note."""
 
+        self._validate_note(midi_note)
         frequency = self.midi_to_frequency(midi_note)
 
         number_of_samples = int(self.SAMPLE_RATE * duration)
@@ -65,6 +89,9 @@ class SineWavePlayer:
 
         if not midi_notes:
             raise ValueError("A chord must contain at least one note.")
+
+        for midi_note in midi_notes:
+            self._validate_note(midi_note)
 
         signals = [
             self.generate_tone(

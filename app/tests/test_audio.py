@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from app.audio.sine_player import SineWavePlayer
 
@@ -59,3 +60,17 @@ def test_chord_generation():
     assert np.max(
         np.abs(signal)
     ) <= 1.0
+
+
+def test_tone_outside_playable_range_raises_error():
+    player = SineWavePlayer()
+
+    with pytest.raises(ValueError):
+        player.generate_tone(35)
+
+
+def test_chord_outside_playable_range_raises_error():
+    player = SineWavePlayer()
+
+    with pytest.raises(ValueError):
+        player.generate_chord([60, 97])

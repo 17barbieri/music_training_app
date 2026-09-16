@@ -62,6 +62,14 @@ def test_invalid_note_range_raises_error():
         )
 
 
+def test_generator_rejects_notes_outside_playable_range():
+    with pytest.raises(ValueError):
+        IntervalGenerator(min_note=35)
+
+    with pytest.raises(ValueError):
+        IntervalGenerator(max_note=97)
+
+
 def test_range_too_small_for_interval():
     generator = IntervalGenerator(
         min_note=60,

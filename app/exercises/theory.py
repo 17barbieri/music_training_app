@@ -2,7 +2,6 @@ from __future__ import annotations
 
 
 INTERVALS: dict[str, int] = {
-    "Unison": 0,
     "Minor 2nd": 1,
     "Major 2nd": 2,
     "Minor 3rd": 3,
@@ -38,7 +37,6 @@ INTERVAL_NAMES: dict[int, str] = {
 # consonance, tonal context, etc.
 INTERVAL_DIFFICULTIES: dict[str, list[int]] = {
     "Beginner": [
-        0,
         7,
         12,
     ],
@@ -50,7 +48,7 @@ INTERVAL_DIFFICULTIES: dict[str, list[int]] = {
         8,
         9,
     ],
-    "Advanced": list(range(13)),
+    "Advanced": list(range(1, 13)),
 }
 
 
@@ -59,11 +57,32 @@ CHORDS: dict[str, list[int]] = {
     "Minor": [0, 3, 7],
     "Diminished": [0, 3, 6],
     "Augmented": [0, 4, 8],
+    "Suspended 2nd": [0, 2, 7],
+    "Suspended 4th": [0, 5, 7],
+    "Major 6th": [0, 4, 7, 9],
+    "Minor 6th": [0, 3, 7, 9],
     "Major 7th": [0, 4, 7, 11],
     "Minor 7th": [0, 3, 7, 10],
     "Dominant 7th": [0, 4, 7, 10],
     "Half-diminished 7th": [0, 3, 6, 10],
     "Diminished 7th": [0, 3, 6, 9],
+}
+
+
+CHORD_PROFILES: dict[str, list[str]] = {
+    "All triads": ["Major", "Minor", "Diminished", "Augmented"],
+    "All triads + 7ths": [
+        "Major",
+        "Minor",
+        "Diminished",
+        "Augmented",
+        "Major 7th",
+        "Minor 7th",
+        "Dominant 7th",
+        "Half-diminished 7th",
+        "Diminished 7th",
+    ],
+    "All chords": list(CHORDS),
 }
 
 
