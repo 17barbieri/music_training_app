@@ -22,13 +22,18 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QScrollArea,
 )
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtSvgWidgets import QSvgWidget
 
-from app.audio.sine_player import SineWavePlayer
+from app.audio.piano_player import PianoPlayer
 from app.exercises.generator import IntervalGenerator
 from app.exercises.interval import IntervalExercise
 from app.exercises.confusion_matrix import ConfusionMatrix
 from app.exercises.chord import ChordExercise
 from app.exercises.chord_generator import ChordGenerator
+from app.exercises.progression import ProgressionExercise
+from app.exercises.progression_generator import ProgressionGenerator
+from app.exercises.notation import LilyPondRenderer
 from app.exercises.theory import (
     CHORDS,
     CHORD_PROFILES,
@@ -41,16 +46,31 @@ from app.exercises.theory import (
 class MainWindow(QMainWindow):
     """Main application window."""
 
+    def closeEvent(self, event) -> None:
+        """Release the FluidSynth engine when the application exits."""
+
+        self.audio.close()
+        if self._notation_temporary_directory is not None:
+            self._notation_temporary_directory.cleanup()
+        event.accept()
+
     def __init__(self) -> None:
         super().__init__()
 
-        self.audio = SineWavePlayer()
+        self.audio = PianoPlayer()
 
         self.interval_generator = IntervalGenerator()
         self.chord_generator = ChordGenerator()
+        self.progression_generator = ProgressionGenerator()
+        self.notation_renderer: LilyPondRenderer | None = None
+        self._notation_svg_path = None
+        self._notation_temporary_directory = None
         self.confusion_matrix = ConfusionMatrix()
 
-        self.current_exercise: IntervalExercise | ChordExercise | None = None
+        self.current_exercise: (
+            IntervalExercise | ChordExercise | ProgressionExercise | None
+        ) = None
+        self.progression_answer_index = 0
         self.chord_checkboxes: dict[str, QCheckBox] = {}
         self.selected_chords = list(CHORD_PROFILES["All triads"])
 
@@ -63,6 +83,7 @@ class MainWindow(QMainWindow):
         self._colour_buttons: dict[str, QPushButton] = {}
         self._chord_type_buttons: dict[str, QPushButton] = {}
         self._chord_inversion_buttons: dict[int, QPushButton] = {}
+        self._progression_degree_buttons: dict[str, QPushButton] = {}
         self._selected_chord_type: str | None = None
         self._selected_chord_inversion: int | None = None
 
@@ -201,6 +222,46 @@ class MainWindow(QMainWindow):
         self.play_button.clicked.connect(self._play_current_exercise)
         current_layout.addWidget(self.play_button)
 
+        chord_playback_layout = QHBoxLayout()
+        self.play_chord_button = QPushButton("Play chord")
+        self.play_chord_button.setCheckable(True)
+        self.play_chord_button.setChecked(True)
+        self.play_chord_button.clicked.connect(
+            lambda: self._set_chord_playback_mode("chord")
+        )
+        chord_playback_layout.addWidget(self.play_chord_button)
+
+        self.play_single_notes_button = QPushButton("Play single notes")
+        self.play_single_notes_button.setCheckable(True)
+        self.play_single_notes_button.clicked.connect(
+            lambda: self._set_chord_playback_mode("single_notes")
+        )
+        chord_playback_layout.addWidget(self.play_single_notes_button)
+        current_layout.addLayout(chord_playback_layout)
+
+        self.progression_reveal = QLabel()
+        self.progression_reveal.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        current_layout.addWidget(self.progression_reveal)
+
+        progression_playback_layout = QHBoxLayout()
+        self.play_built_progression_button = QPushButton("Play built progression")
+        self.play_built_progression_button.clicked.connect(
+            lambda: self._play_progression(prefix_only=True)
+        )
+        progression_playback_layout.addWidget(self.play_built_progression_button)
+        self.play_full_progression_button = QPushButton("Play full progression")
+        self.play_full_progression_button.clicked.connect(
+            lambda: self._play_progression(prefix_only=False)
+        )
+        progression_playback_layout.addWidget(self.play_full_progression_button)
+        self.view_score_button = QPushButton("View score")
+        self.view_score_button.clicked.connect(self._show_progression_notation)
+        progression_playback_layout.addWidget(self.view_score_button)
+        self.next_question_button = QPushButton("Next question")
+        self.next_question_button.clicked.connect(self._after_progression)
+        progression_playback_layout.addWidget(self.next_question_button)
+        current_layout.addLayout(progression_playback_layout)
+
         answers_group = QGroupBox("Your answer")
         self.answers_layout = QGridLayout(answers_group)
         self.answers_scroll = QScrollArea()
@@ -245,6 +306,7 @@ class MainWindow(QMainWindow):
         self._refresh_matrix()
         self._refresh_exercise_options()
         self._update_chord_selection_visibility()
+        self._update_progression_controls()
 
         # ---------------------------------------------------------
         # Styling
@@ -326,6 +388,8 @@ class MainWindow(QMainWindow):
 
         if index == 0:
             self._generate_next_exercise()
+        elif index == 2:
+            self._generate_next_exercise()
 
         else:
             self.current_exercise = None
@@ -333,6 +397,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText(
                 "This exercise type is not implemented yet."
             )
+        self._update_progression_controls()
 
     def _difficulty_changed(
         self,
@@ -398,7 +463,25 @@ class MainWindow(QMainWindow):
         self._generate_next_exercise()
 
     def _update_chord_selection_visibility(self) -> None:
-        self.choose_chords_button.setVisible(self.exercise_combo.currentIndex() == 1)
+        is_chord_exercise = self.exercise_combo.currentIndex() == 1
+        self.choose_chords_button.setVisible(is_chord_exercise)
+        self.play_chord_button.setVisible(is_chord_exercise)
+        self.play_single_notes_button.setVisible(is_chord_exercise)
+
+    def _update_progression_controls(self) -> None:
+        is_progression = self.exercise_combo.currentIndex() == 2
+        progression_complete = (
+            is_progression
+            and isinstance(self.current_exercise, ProgressionExercise)
+            and self.progression_answer_index >= len(self.current_exercise.degrees)
+        )
+        self.play_built_progression_button.setVisible(is_progression)
+        self.play_full_progression_button.setVisible(is_progression)
+        self.view_score_button.setVisible(progression_complete)
+        self.next_question_button.setVisible(progression_complete)
+        self.progression_reveal.setVisible(is_progression)
+        if not is_progression:
+            self.progression_reveal.clear()
 
     def _refresh_exercise_options(self) -> None:
         """Show only the options belonging to the selected exercise type."""
@@ -445,7 +528,7 @@ class MainWindow(QMainWindow):
         self._refresh_answers()
 
         # Generate the first exercise for the session
-        if self.exercise_combo.currentIndex() in (0, 1):
+        if self.exercise_combo.currentIndex() in (0, 1, 2):
             # reset scores for new session
             self.total_questions = 0
             self.correct_answers = 0
@@ -467,6 +550,7 @@ class MainWindow(QMainWindow):
         self._colour_buttons.clear()
         self._chord_type_buttons.clear()
         self._chord_inversion_buttons.clear()
+        self._progression_degree_buttons.clear()
         self._selected_chord_type = None
         self._selected_chord_inversion = None
 
@@ -489,6 +573,9 @@ class MainWindow(QMainWindow):
 
         elif exercise_index == 1:
             options = self._chord_answers(self._selected_chords())
+
+        elif exercise_index == 2:
+            options = ["I", "ii", "iii", "IV", "V", "vi", "vii"]
 
         else:
             options = PROGRESSIONS
@@ -581,6 +668,19 @@ class MainWindow(QMainWindow):
             self.answers_layout.addWidget(type_group, 0, 0)
             self.answers_layout.addWidget(inversion_group, 0, 1)
             self._update_chord_inversion_buttons()
+
+        elif exercise_index == 2:
+            progression_group = QGroupBox("Scale degree")
+            progression_layout = QGridLayout(progression_group)
+            for index, degree in enumerate(options):
+                button = QPushButton(degree)
+                button.setMinimumHeight(36)
+                button.clicked.connect(
+                    lambda checked=False, value=degree: self._progression_degree_selected(value)
+                )
+                progression_layout.addWidget(button, 0, index)
+                self._progression_degree_buttons[degree] = button
+            self.answers_layout.addWidget(progression_group, 0, 0)
 
         else:
             for index, answer in enumerate(options):
@@ -713,6 +813,12 @@ class MainWindow(QMainWindow):
                 self.status_label.setText("Select at least one chord type.")
                 return
             self.current_exercise = self.chord_generator.generate(selected_chords)
+        elif self.exercise_combo.currentIndex() == 2:
+            self.current_exercise = self.progression_generator.generate()
+            self.progression_answer_index = 0
+            self.progression_reveal.setText("Your answer: (none yet)")
+            self._prepare_progression_notation()
+            self._update_progression_controls()
         else:
             allowed_intervals = INTERVAL_DIFFICULTIES[difficulty]
             self.current_exercise = self.interval_generator.generate(allowed_intervals)
@@ -720,6 +826,25 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             "Press Play to hear the exercise."
         )
+
+    def _prepare_progression_notation(self) -> None:
+        """Create LilyPond source and rendering for the current progression."""
+
+        if self._notation_temporary_directory is not None:
+            self._notation_temporary_directory.cleanup()
+            self._notation_temporary_directory = None
+            self._notation_svg_path = None
+        if not isinstance(self.current_exercise, ProgressionExercise):
+            return
+        try:
+            if self.notation_renderer is None:
+                self.notation_renderer = LilyPondRenderer()
+            self._notation_svg_path, self._notation_temporary_directory = (
+                self.notation_renderer.render(self.current_exercise)
+            )
+            self._notation_render_error = None
+        except (FileNotFoundError, RuntimeError, OSError) as error:
+            self._notation_render_error = str(error)
 
     def _refresh_matrix(self) -> None:
         """Display the persistent confusion matrix for the selected exercise."""
@@ -857,7 +982,7 @@ class MainWindow(QMainWindow):
         self._refresh_matrix()
 
     def _play_current_exercise(self) -> None:
-        """Play the currently generated interval."""
+        """Play the currently generated exercise."""
 
         if self.current_exercise is None:
             return
@@ -868,8 +993,15 @@ class MainWindow(QMainWindow):
             "Playing..."
         )
 
+        if isinstance(exercise, ProgressionExercise):
+            self._play_progression(prefix_only=False)
+            return
         if isinstance(exercise, ChordExercise):
-            self.audio.play_chord(exercise.notes, duration=1.0)
+            if self.play_single_notes_button.isChecked():
+                for midi_note in exercise.notes:
+                    self.audio.play_note(midi_note, duration=0.7)
+            else:
+                self.audio.play_chord(exercise.notes, duration=1.0)
         else:
             self.audio.play_note(exercise.root_note, duration=0.7)
             self.audio.play_note(exercise.second_note, duration=0.7)
@@ -879,6 +1011,128 @@ class MainWindow(QMainWindow):
             if isinstance(exercise, IntervalExercise)
             else "What chord did you hear?"
         )
+
+    def _play_progression(self, prefix_only: bool) -> None:
+        """Play the full progression or the answer prefix built so far."""
+
+        exercise = self.current_exercise
+        if not isinstance(exercise, ProgressionExercise):
+            return
+        end = self.progression_answer_index if prefix_only else len(exercise.chords)
+        if end == 0:
+            self.status_label.setText("Select at least one scale degree first.")
+            return
+        self.status_label.setText(
+            "Playing built progression..." if prefix_only else "Playing full progression..."
+        )
+        for chord in exercise.chords[:end]:
+            self.audio.play_chord(chord, duration=0.7)
+        self.status_label.setText("What scale degrees did you hear?")
+
+    def _show_progression_notation(self) -> None:
+        """Render the current progression and show it in a separate window."""
+
+        if not isinstance(self.current_exercise, ProgressionExercise):
+            return
+        if self._notation_svg_path is None:
+            QMessageBox.warning(
+                self,
+                "Notation unavailable",
+                getattr(self, "_notation_render_error", "Notation is not available."),
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Progression notation")
+        renderer = QSvgRenderer(str(self._notation_svg_path))
+        natural_size = renderer.defaultSize()
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            score_width = min(natural_size.width(), available.width() - 80)
+            score_height = min(natural_size.height(), available.height() - 180)
+        else:
+            score_width = natural_size.width()
+            score_height = natural_size.height()
+        score_width = max(700, score_width)
+        score_height = max(260, score_height)
+        dialog.resize(score_width + 40, score_height + 90)
+        layout = QVBoxLayout(dialog)
+        score_scroll = QScrollArea(dialog)
+        score_scroll.setWidgetResizable(False)
+        score_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        notation = QSvgWidget(str(self._notation_svg_path), dialog)
+        notation.setFixedSize(score_width, score_height)
+        score_scroll.setWidget(notation)
+        layout.addWidget(score_scroll)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.exec()
+
+    def _progression_degree_selected(self, degree: str) -> None:
+        """Check the next progression degree and reveal the correct prefix."""
+
+        exercise = self.current_exercise
+        if not isinstance(exercise, ProgressionExercise):
+            return
+        index = self.progression_answer_index
+        if index >= len(exercise.degrees):
+            return
+
+        correct = exercise.is_correct_at(index, degree)
+        selected_button = self._progression_degree_buttons.get(degree)
+        correct_button = self._progression_degree_buttons.get(
+            exercise.degrees[index]
+        )
+        if selected_button is not None:
+            selected_button.setStyleSheet(
+                "background: #d4ffd4" if correct else "background: #ffd6d6"
+            )
+        if not correct and correct_button is not None:
+            correct_button.setStyleSheet("background: #d4ffd4")
+        QTimer.singleShot(1000, self._clear_progression_feedback)
+        self.confusion_matrix.record(
+            self.exercise_combo.currentText(),
+            exercise.degrees[index],
+            degree,
+        )
+        self.progression_answer_index += 1
+        self.progression_reveal.setText(
+            f"Answer so far: {exercise.revealed_answer(self.progression_answer_index)}"
+        )
+        self.status_label.setText(
+            "Correct so far. Continue." if correct else
+            f"That chord was {exercise.degrees[index]}. Continue."
+        )
+
+        if self.progression_answer_index == len(exercise.degrees):
+            if all(
+                exercise.degrees[position] == degree
+                for position, degree in enumerate(exercise.degrees)
+            ):
+                self.correct_answers += 1
+            self.total_questions += 1
+            self._update_score()
+            self._update_progression_controls()
+
+    def _clear_progression_feedback(self) -> None:
+        """Remove temporary progression answer colors after one second."""
+
+        for button in self._progression_degree_buttons.values():
+            button.setStyleSheet("")
+
+    def _after_progression(self) -> None:
+        self._clear_staged_selection()
+        self._generate_next_exercise()
+        self._update_progression_controls()
+
+    def _set_chord_playback_mode(self, mode: str) -> None:
+        """Select whether chord notes play together or sequentially."""
+
+        play_single_notes = mode == "single_notes"
+        self.play_single_notes_button.setChecked(play_single_notes)
+        self.play_chord_button.setChecked(not play_single_notes)
 
     def _answer_selected(
         self,
@@ -954,10 +1208,18 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        for btn in self._progression_degree_buttons.values():
+            try:
+                btn.setChecked(False)
+                btn.setStyleSheet("")
+            except Exception:
+                pass
+
         self._selected_nature = None
         self._selected_colour = None
         self._selected_chord_type = None
         self._selected_chord_inversion = None
+        self._update_chord_inversion_buttons()
 
     def _show_feedback(self, given: str, correct: bool, correct_answer: str) -> None:
         """Visually mark selected and correct buttons.
@@ -1101,6 +1363,11 @@ class MainWindow(QMainWindow):
 
     def _update_chord_inversion_buttons(self) -> None:
         chord_type = self._selected_chord_type
-        inversion_count = len(CHORDS.get(chord_type, [0, 1, 2]))
+        if chord_type is None:
+            for button in self._chord_inversion_buttons.values():
+                button.setVisible(True)
+            return
+
+        inversion_count = len(CHORDS[chord_type])
         for inversion, button in self._chord_inversion_buttons.items():
             button.setVisible(inversion < inversion_count and chord_type != "Augmented")
