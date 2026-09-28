@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QSizePolicy,
     QScrollArea,
+    QLineEdit,
+    QListWidget,
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QSvgWidget
@@ -37,10 +39,12 @@ from app.exercises.notation import LilyPondRenderer
 from app.exercises.theory import (
     CHORDS,
     CHORD_PROFILES,
+    CHORD_PROGRESSION_PROFILES,
     INTERVAL_DIFFICULTIES,
     INTERVALS,
     PROGRESSIONS,
 )
+from app.library import ProgressionLibrary
 
 
 class MainWindow(QMainWindow):
@@ -66,6 +70,7 @@ class MainWindow(QMainWindow):
         self._notation_svg_path = None
         self._notation_temporary_directory = None
         self.confusion_matrix = ConfusionMatrix()
+        self.library = ProgressionLibrary()
 
         self.current_exercise: (
             IntervalExercise | ChordExercise | ProgressionExercise | None
@@ -122,7 +127,28 @@ class MainWindow(QMainWindow):
         # Stacked layout: selection page (0) and exercise page (1)
         self.stacked_layout = QStackedLayout(central_widget)
 
-        # ---------- Selection page ----------
+        # ---------- Section chooser ----------
+        landing_page = QWidget()
+        landing_layout = QVBoxLayout(landing_page)
+        landing_layout.setContentsMargins(32, 48, 32, 28)
+        landing_layout.setSpacing(12)
+        landing_title = QLabel("Harmony Trainer")
+        landing_title.setObjectName("title")
+        landing_layout.addWidget(landing_title)
+        landing_layout.addWidget(QLabel("Choose a section to begin."))
+        section_buttons = QHBoxLayout()
+        library_button = QPushButton("Library")
+        library_button.setMinimumHeight(48)
+        library_button.clicked.connect(self._show_library)
+        section_buttons.addWidget(library_button)
+        exercises_button = QPushButton("Exercises")
+        exercises_button.setMinimumHeight(48)
+        exercises_button.clicked.connect(self._show_exercises)
+        section_buttons.addWidget(exercises_button)
+        landing_layout.addLayout(section_buttons)
+        self.stacked_layout.addWidget(landing_page)
+
+        # ---------- Exercises selection page ----------
         selection_page = QWidget()
         selection_layout = QVBoxLayout(selection_page)
         # increase top margin so title/banner is fully visible
@@ -168,7 +194,8 @@ class MainWindow(QMainWindow):
         self.options_layout.addWidget(self.difficulty_label, 0, 0)
         self.options_layout.addWidget(self.difficulty_combo, 0, 1)
 
-        self.chord_profile_label = QLabel("Chord profile:")
+        # self.chord_profile_label = QLabel("Chord profile:")
+        self.chord_profile_label = QLabel("Difficulty:")
         self.chord_profile_combo = QComboBox()
         self.chord_profile_combo.addItems(CHORD_PROFILES)
         self.chord_profile_combo.currentTextChanged.connect(
@@ -177,8 +204,18 @@ class MainWindow(QMainWindow):
         self.options_layout.addWidget(self.chord_profile_label, 1, 0)
         self.options_layout.addWidget(self.chord_profile_combo, 1, 1)
 
+        # Add chord progression options
+        self.chord_progression_label = QLabel("Progression profile:")
+        self.chord_progression_combo = QComboBox()
+        self.chord_progression_combo.addItems(CHORD_PROGRESSION_PROFILES)
+        # self.chord_progression_combo.currentTextChanged.connect(
+        #     self._chord_progression_changed
+        # )
+        self.options_layout.addWidget(self.chord_progression_label, 2, 0)
+        self.options_layout.addWidget(self.chord_progression_combo, 2, 1)
+
         self.options_message = QLabel()
-        self.options_layout.addWidget(self.options_message, 2, 0, 1, 2)
+        self.options_layout.addWidget(self.options_message, 3, 0, 1, 2)
 
         selection_layout.addWidget(self.options_group)
 
@@ -217,13 +254,21 @@ class MainWindow(QMainWindow):
         self.status_label.setMinimumHeight(30)
         current_layout.addWidget(self.status_label)
 
-        self.play_button = QPushButton("▶  Play")
-        self.play_button.setMinimumHeight(32)
-        self.play_button.clicked.connect(self._play_current_exercise)
-        current_layout.addWidget(self.play_button)
+        interval_playback_layout = QHBoxLayout()
+        self.play_melodic_button = QPushButton("Play melodic")
+        self.play_melodic_button.clicked.connect(
+            lambda: self._play_current_exercise("melodic")
+        )
+        interval_playback_layout.addWidget(self.play_melodic_button)
+        self.play_harmonic_button = QPushButton("Play harmonic")
+        self.play_harmonic_button.clicked.connect(
+            lambda: self._play_current_exercise("harmonic")
+        )
+        interval_playback_layout.addWidget(self.play_harmonic_button)
+        current_layout.addLayout(interval_playback_layout)
 
         chord_playback_layout = QHBoxLayout()
-        self.play_chord_button = QPushButton("Play chord")
+        self.play_chord_button = QPushButton("Play harmonic")
         self.play_chord_button.setCheckable(True)
         self.play_chord_button.setChecked(True)
         self.play_chord_button.clicked.connect(
@@ -231,7 +276,7 @@ class MainWindow(QMainWindow):
         )
         chord_playback_layout.addWidget(self.play_chord_button)
 
-        self.play_single_notes_button = QPushButton("Play single notes")
+        self.play_single_notes_button = QPushButton("Play melodic")
         self.play_single_notes_button.setCheckable(True)
         self.play_single_notes_button.clicked.connect(
             lambda: self._set_chord_playback_mode("single_notes")
@@ -257,6 +302,9 @@ class MainWindow(QMainWindow):
         self.view_score_button = QPushButton("View score")
         self.view_score_button.clicked.connect(self._show_progression_notation)
         progression_playback_layout.addWidget(self.view_score_button)
+        self.save_progression_button = QPushButton("Save progression")
+        self.save_progression_button.clicked.connect(self._save_current_progression)
+        progression_playback_layout.addWidget(self.save_progression_button)
         self.next_question_button = QPushButton("Next question")
         self.next_question_button.clicked.connect(self._after_progression)
         progression_playback_layout.addWidget(self.next_question_button)
@@ -301,12 +349,33 @@ class MainWindow(QMainWindow):
 
         self.stacked_layout.addWidget(exercise_page)
 
+        # ---------- Library page ----------
+        self.library_page = QWidget()
+        library_layout = QVBoxLayout(self.library_page)
+        library_layout.setContentsMargins(24, 24, 24, 20)
+        library_title = QLabel("Library")
+        library_title.setObjectName("title")
+        library_layout.addWidget(library_title)
+        library_layout.addWidget(QLabel("Saved and user-created chord progressions."))
+        self.library_list = QListWidget()
+        library_layout.addWidget(self.library_list)
+        library_actions = QHBoxLayout()
+        add_progression_button = QPushButton("Add progression")
+        add_progression_button.clicked.connect(self._add_library_progression)
+        library_actions.addWidget(add_progression_button)
+        back_to_sections_button = QPushButton("Back")
+        back_to_sections_button.clicked.connect(lambda: self.stacked_layout.setCurrentIndex(0))
+        library_actions.addWidget(back_to_sections_button)
+        library_layout.addLayout(library_actions)
+        self.stacked_layout.addWidget(self.library_page)
+
         # Initialize answers for current selection
         self._refresh_answers()
         self._refresh_matrix()
         self._refresh_exercise_options()
         self._update_chord_selection_visibility()
         self._update_progression_controls()
+        self._refresh_library()
 
         # ---------------------------------------------------------
         # Styling
@@ -462,11 +531,52 @@ class MainWindow(QMainWindow):
         self._refresh_answers()
         self._generate_next_exercise()
 
+    def _save_current_progression(self) -> None:
+        if isinstance(self.current_exercise, ProgressionExercise):
+            self.library.add(list(self.current_exercise.degrees), "Saved exercise")
+            self.status_label.setText("Progression saved to Library.")
+
+    def _refresh_library(self) -> None:
+        self.library_list.clear()
+        for entry in self.library.entries:
+            degrees = " - ".join(entry.get("degrees", []))
+            source = entry.get("source", "Library")
+            self.library_list.addItem(f"{degrees}  ({source})")
+
+    def _add_library_progression(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add progression")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Enter Roman numerals separated by spaces:"))
+        field = QLineEdit(dialog)
+        field.setPlaceholderText("I IV V I")
+        layout.addWidget(field)
+        buttons = QHBoxLayout()
+        add_button = QPushButton("Add")
+        cancel_button = QPushButton("Cancel")
+        buttons.addWidget(add_button)
+        buttons.addWidget(cancel_button)
+        layout.addLayout(buttons)
+        add_button.clicked.connect(dialog.accept)
+        cancel_button.clicked.connect(dialog.reject)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        degrees = field.text().replace("–", " ").replace("-", " ").split()
+        allowed = {"I", "ii", "iii", "IV", "V", "vi", "vii"}
+        if not 3 <= len(degrees) <= 7 or any(degree not in allowed for degree in degrees):
+            QMessageBox.warning(self, "Invalid progression", "Use 3-7 valid Roman numerals.")
+            return
+        self.library.add(degrees, "User progression")
+        self._refresh_library()
+
     def _update_chord_selection_visibility(self) -> None:
         is_chord_exercise = self.exercise_combo.currentIndex() == 1
         self.choose_chords_button.setVisible(is_chord_exercise)
         self.play_chord_button.setVisible(is_chord_exercise)
         self.play_single_notes_button.setVisible(is_chord_exercise)
+        is_interval_exercise = self.exercise_combo.currentIndex() == 0
+        self.play_melodic_button.setVisible(is_interval_exercise)
+        self.play_harmonic_button.setVisible(is_interval_exercise)
 
     def _update_progression_controls(self) -> None:
         is_progression = self.exercise_combo.currentIndex() == 2
@@ -478,24 +588,49 @@ class MainWindow(QMainWindow):
         self.play_built_progression_button.setVisible(is_progression)
         self.play_full_progression_button.setVisible(is_progression)
         self.view_score_button.setVisible(progression_complete)
+        self.save_progression_button.setVisible(progression_complete)
         self.next_question_button.setVisible(progression_complete)
         self.progression_reveal.setVisible(is_progression)
         if not is_progression:
             self.progression_reveal.clear()
 
+    # def _refresh_exercise_options(self) -> None:
+    #     """Show only the options belonging to the selected exercise type."""
+
+    #     exercise_index = self.exercise_combo.currentIndex()
+    #     is_interval = exercise_index == 0
+    #     is_chord = exercise_index == 1
+    #     is_progression = exercise_index == 2
+
+    #     self.difficulty_label.setVisible(is_interval)
+    #     self.difficulty_combo.setVisible(is_interval)
+
+    #     self.chord_profile_label.setVisible(is_chord)
+    #     self.chord_profile_combo.setVisible(is_chord)
+
+    #     self.chord_progression_label.setVisible(is_progression)
+    #     self.chord_progression_combo.setVisible(is_progression)
+
+    #     self.options_message.setVisible(False)
     def _refresh_exercise_options(self) -> None:
         """Show only the options belonging to the selected exercise type."""
 
         exercise_index = self.exercise_combo.currentIndex()
+
         is_interval = exercise_index == 0
         is_chord = exercise_index == 1
+        is_progression = exercise_index == 2
+
         self.difficulty_label.setVisible(is_interval)
         self.difficulty_combo.setVisible(is_interval)
+
         self.chord_profile_label.setVisible(is_chord)
         self.chord_profile_combo.setVisible(is_chord)
-        self.options_message.setVisible(exercise_index > 1)
-        if exercise_index > 1:
-            self.options_message.setText("No options are available yet.")
+
+        self.chord_progression_label.setVisible(is_progression)
+        self.chord_progression_combo.setVisible(is_progression)
+
+        self.options_message.setVisible(False)
 
     def _selected_chords(self) -> list[str]:
         return list(self.selected_chords)
@@ -536,12 +671,19 @@ class MainWindow(QMainWindow):
             self._generate_next_exercise()
 
         # Switch to exercise page
-        self.stacked_layout.setCurrentIndex(1)
+        self.stacked_layout.setCurrentIndex(2)
 
     def _go_back(self) -> None:
         """Return to the selection page."""
 
-        self.stacked_layout.setCurrentIndex(0)
+        self.stacked_layout.setCurrentIndex(1)
+
+    def _show_exercises(self) -> None:
+        self.stacked_layout.setCurrentIndex(1)
+
+    def _show_library(self) -> None:
+        self._refresh_library()
+        self.stacked_layout.setCurrentIndex(3)
 
     def _refresh_answers(self) -> None:
         """Update answer buttons according to exercise type."""
@@ -814,7 +956,10 @@ class MainWindow(QMainWindow):
                 return
             self.current_exercise = self.chord_generator.generate(selected_chords)
         elif self.exercise_combo.currentIndex() == 2:
-            self.current_exercise = self.progression_generator.generate()
+            profile = self.chord_progression_combo.currentText()
+            self.current_exercise = self.progression_generator.generate(
+                profile=profile
+            )
             self.progression_answer_index = 0
             self.progression_reveal.setText("Your answer: (none yet)")
             self._prepare_progression_notation()
@@ -981,7 +1126,7 @@ class MainWindow(QMainWindow):
         self.confusion_matrix.reset(exercise_type)
         self._refresh_matrix()
 
-    def _play_current_exercise(self) -> None:
+    def _play_current_exercise(self, mode: str) -> None:
         """Play the currently generated exercise."""
 
         if self.current_exercise is None:
@@ -997,14 +1142,20 @@ class MainWindow(QMainWindow):
             self._play_progression(prefix_only=False)
             return
         if isinstance(exercise, ChordExercise):
-            if self.play_single_notes_button.isChecked():
+            if mode == "melodic":
                 for midi_note in exercise.notes:
                     self.audio.play_note(midi_note, duration=0.7)
             else:
                 self.audio.play_chord(exercise.notes, duration=1.0)
         else:
-            self.audio.play_note(exercise.root_note, duration=0.7)
-            self.audio.play_note(exercise.second_note, duration=0.7)
+            if mode == "harmonic":
+                self.audio.play_chord(
+                    [exercise.root_note, exercise.second_note],
+                    duration=0.7,
+                )
+            else:
+                self.audio.play_note(exercise.root_note, duration=0.7)
+                self.audio.play_note(exercise.second_note, duration=0.7)
 
         self.status_label.setText(
             "What interval did you hear?"

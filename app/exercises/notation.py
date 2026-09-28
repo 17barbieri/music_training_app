@@ -91,6 +91,7 @@ class LilyPondRenderer:
   <<
     \\new Staff <<
       \\new Voice = "progression" {{
+                \\magnifyStaff #1.35
         \\clef treble
         \\key {key_name} \\major
         \\time 4/4

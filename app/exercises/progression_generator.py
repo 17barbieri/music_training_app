@@ -28,6 +28,15 @@ CADENCE_TAILS = {
     "half": ("V",),
     "deceptive": ("V", "vi"),
 }
+
+PROGRESSION_PROFILES = (
+    "Cadences",
+    "Standard progressions",
+    "All chords",
+)
+
+CADENCE_TYPES = tuple(CADENCE_TAILS.keys())
+
 CHORD_INTERVALS = {
     "I": (0, 4, 7), "ii": (0, 3, 7), "iii": (0, 3, 7),
     "IV": (0, 4, 7), "V": (0, 4, 7), "vi": (0, 3, 7),
@@ -90,24 +99,92 @@ class ProgressionGenerator:
         self.random = random.Random(seed)
         self.classical_voice_leading = classical_voice_leading
 
-    def _harmonic_sequence(self, cadence: str | None) -> tuple[str, ...]:
-        length = self.random.randint(self.difficulty.min_length, self.difficulty.max_length)
-        if cadence:
+    def _harmonic_sequence(
+        self,
+        profile: str,
+        cadence: str | None = None,
+    ) -> tuple[str, ...]:
+        if profile not in PROGRESSION_PROFILES:
+            raise ValueError(f"Unsupported progression profile: {profile}")
+
+        if profile == "Cadences":
+            if cadence is None:
+                cadence = self.random.choice(CADENCE_TYPES)
+
             if cadence not in CADENCE_TAILS:
                 raise ValueError(f"Unsupported cadence: {cadence}")
+
+            length = self.random.randint(3, min(5, self.difficulty.max_length))
             tail = CADENCE_TAILS[cadence]
+
             if len(tail) > length:
                 raise ValueError("Cadence does not fit progression length.")
+
             prefix_length = length - len(tail)
-            prefix = ("I",) if prefix_length else ()
-            while len(prefix) < prefix_length:
-                prefix += (self.random.choice(("I", "vi", "iii", "ii", "IV", "V")),)
-            return prefix[:prefix_length] + tail
-        template = self.random.choice(tuple(t for t in TEMPLATES if len(t) <= length))
+
+            if prefix_length == 0:
+                prefix = ()
+            elif prefix_length == 1:
+                prefix = ("I",)
+            else:
+                prefix = tuple(
+                    self.random.choice(("I", "ii", "IV", "vi"))
+                    for _ in range(prefix_length)
+                )
+
+            return prefix + tail
+
+        if profile == "Standard progressions":
+            valid_templates = tuple(
+                template
+                for template in TEMPLATES
+                if self.difficulty.min_length
+                <= len(template)
+                <= self.difficulty.max_length
+            )
+
+            if not valid_templates:
+                raise ValueError("No standard progression fits configured length.")
+
+            return self.random.choice(valid_templates)
+
+        # "All chords": current general-purpose behavior.
+        length = self.random.randint(
+            self.difficulty.min_length,
+            self.difficulty.max_length,
+        )
+
+        template = self.random.choice(
+            tuple(t for t in TEMPLATES if len(t) <= length)
+        )
+
         sequence = list(template)
+
         while len(sequence) < length:
-            sequence.insert(-1, self.random.choice(("ii", "IV", "V")))
+            sequence.insert(
+                -1,
+                self.random.choice(("ii", "IV", "V")),
+            )
+
         return tuple(sequence)
+    # def _harmonic_sequence(self, cadence: str | None) -> tuple[str, ...]:
+    #     length = self.random.randint(self.difficulty.min_length, self.difficulty.max_length)
+    #     if cadence:
+    #         if cadence not in CADENCE_TAILS:
+    #             raise ValueError(f"Unsupported cadence: {cadence}")
+    #         tail = CADENCE_TAILS[cadence]
+    #         if len(tail) > length:
+    #             raise ValueError("Cadence does not fit progression length.")
+    #         prefix_length = length - len(tail)
+    #         prefix = ("I",) if prefix_length else ()
+    #         while len(prefix) < prefix_length:
+    #             prefix += (self.random.choice(("I", "vi", "iii", "ii", "IV", "V")),)
+    #         return prefix[:prefix_length] + tail
+    #     template = self.random.choice(tuple(t for t in TEMPLATES if len(t) <= length))
+    #     sequence = list(template)
+    #     while len(sequence) < length:
+    #         sequence.insert(-1, self.random.choice(("ii", "IV", "V")))
+    #     return tuple(sequence)
 
     def _voicing(self, degrees: tuple[str, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
         inversions: list[int] = []
@@ -155,14 +232,40 @@ class ProgressionGenerator:
                 if any(abs(a - b) > 12 for a, b in zip(left, right)):
                     raise ValueError("Excessive voice movement.")
 
-    def generate(self, cadence: str | None = None) -> ProgressionExercise:
+    # def generate(self, cadence: str | None = None) -> ProgressionExercise:
+    #     for _ in range(20):
+    #         degrees = self._harmonic_sequence(cadence)
+    #         chords, inversions = self._voicing(degrees)
+    #         try:
+    #             self._validate(degrees, chords)
+    #         except ValueError:
+    #             continue
+    #         return ProgressionExercise(
+    #             degrees,
+    #             chords,
+    #             tuple(HARMONIC_FUNCTIONS[d] for d in degrees),
+    #             inversions,
+    #             cadence,
+    #             self.min_note % 12,
+    #         )
+    #     raise RuntimeError("Unable to generate a valid harmonic progression.")
+    def generate(
+        self,
+        profile: str = "All chords",
+        cadence: str | None = None,
+    ) -> ProgressionExercise:
+        if profile == "Cadences" and cadence is None:
+            cadence = self.random.choice(CADENCE_TYPES)
+
         for _ in range(20):
-            degrees = self._harmonic_sequence(cadence)
+            degrees = self._harmonic_sequence(profile, cadence)
             chords, inversions = self._voicing(degrees)
+
             try:
                 self._validate(degrees, chords)
             except ValueError:
                 continue
+
             return ProgressionExercise(
                 degrees,
                 chords,
@@ -171,4 +274,7 @@ class ProgressionGenerator:
                 cadence,
                 self.min_note % 12,
             )
-        raise RuntimeError("Unable to generate a valid harmonic progression.")
+
+        raise RuntimeError(
+            "Unable to generate a valid harmonic progression."
+        )

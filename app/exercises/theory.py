@@ -37,16 +37,18 @@ INTERVAL_NAMES: dict[int, str] = {
 # consonance, tonal context, etc.
 INTERVAL_DIFFICULTIES: dict[str, list[int]] = {
     "Beginner": [
-        7,
-        12,
+        5,  # Perfect Fourth
+        7,  # Perfect Fifth
+        12, # Octave
     ],
     "Intermediate": [
-        3,
-        4,
-        5,
-        7,
-        8,
-        9,
+        3,  # Minor third
+        4,  # Major third
+        5,  # Perfect fourth
+        7,  # Perfect fifth
+        8,  # Minor sixth
+        9,  # Major sixth
+        12, # Octave
     ],
     "Advanced": list(range(1, 13)),
 }
@@ -85,7 +87,6 @@ CHORD_PROFILES: dict[str, list[str]] = {
     "All chords": list(CHORDS),
 }
 
-
 PROGRESSIONS: list[str] = [
     "I – IV – V",
     "I – V – I",
@@ -93,3 +94,9 @@ PROGRESSIONS: list[str] = [
     "I – V – vi – IV",
     "I – vi – IV – V",
 ]
+
+CHORD_PROGRESSION_PROFILES: dict[str, list[str]] = {
+    "Cadences": ["Major", "Minor", "Diminished", "Augmented"],
+    "Standard progressions": PROGRESSIONS,
+    "All chords": list(CHORDS),
+} 
